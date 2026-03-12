@@ -1,0 +1,53 @@
+project-details.MD
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# General logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Backend (Python / FastAPI)
+/signbridge-backend/__pycache__/
+/signbridge-backend/**/*.py[cod]
+/signbridge-backend/.venv/
+/signbridge-backend/venv/
+/signbridge-backend/env/
+/signbridge-backend/.python-version
+/signbridge-backend/.env
+/signbridge-backend/.env.*
+/signbridge-backend/.pytest_cache/
+/signbridge-backend/.mypy_cache/
+/signbridge-backend/.ruff_cache/
+/signbridge-backend/.tox/
+/signbridge-backend/.nox/
+/signbridge-backend/.coverage
+/signbridge-backend/htmlcov/
+/signbridge-backend/build/
+/signbridge-backend/dist/
+/signbridge-backend/*.egg-info/
+/signbridge-backend/secrets/*.json
+
+# Frontend (Node / Vite)
+/signbridge-frontend/node_modules/
+/signbridge-frontend/dist/
+/signbridge-frontend/dist-ssr/
+/signbridge-frontend/coverage/
+/signbridge-frontend/.vite/
+/signbridge-frontend/.env
+/signbridge-frontend/.env.local
+/signbridge-frontend/.env.*.local
+/signbridge-frontend/*.local
