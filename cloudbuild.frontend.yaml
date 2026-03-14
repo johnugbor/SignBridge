@@ -1,0 +1,43 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - signbridge-frontend/Dockerfile
+      - -t
+      - ${_AR_HOST}/${PROJECT_ID}/${_AR_REPO}/signbridge-frontend:${_IMAGE_TAG}
+      - --build-arg
+      - VITE_API_URL=${_VITE_API_URL}
+      - --build-arg
+      - VITE_WS_URL=${_VITE_WS_URL}
+      - signbridge-frontend
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_AR_HOST}/${PROJECT_ID}/${_AR_REPO}/signbridge-frontend:${_IMAGE_TAG}
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - signbridge-frontend
+      - --image=${_AR_HOST}/${PROJECT_ID}/${_AR_REPO}/signbridge-frontend:${_IMAGE_TAG}
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --port=5173
+      - --service-account=${_RUN_SA}
+
+images:
+  - ${_AR_HOST}/${PROJECT_ID}/${_AR_REPO}/signbridge-frontend:${_IMAGE_TAG}
+
+substitutions:
+  _REGION: us-central1
+  _AR_HOST: us-central1-docker.pkg.dev
+  _AR_REPO: signbridge
+  _IMAGE_TAG: latest
+  _RUN_SA: signbridge-runner@${PROJECT_ID}.iam.gserviceaccount.com
+  _VITE_API_URL: https://signbridge-backend-REPLACE_ME.a.run.app/api
+  _VITE_WS_URL: wss://signbridge-backend-REPLACE_ME.a.run.app/ws/signbridge

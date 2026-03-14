@@ -1,4 +1,4 @@
-"""Core ADK-style agent orchestrating multimodal flows."""
+"""Core orchestration agent using ADK-backed Gemini services."""
 
 from __future__ import annotations
 

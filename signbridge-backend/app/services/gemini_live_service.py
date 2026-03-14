@@ -1,16 +1,29 @@
-"""Interaction layer with Gemini Live via Vertex AI."""
+"""Interaction layer with Gemini powered by Google ADK agents."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
 import binascii
+import inspect
 import json
+import os
 from pathlib import Path
 from typing import Any, Sequence
+from uuid import uuid4
 
-import vertexai
-from vertexai.preview.generative_models import GenerativeModel, GenerationConfig, Part
+from google.adk.runners import Runner
+from google.genai import types as genai_types
+
+try:  # ADK API path compatibility across versions.
+	from google.adk.agents import LlmAgent
+except ImportError:  # pragma: no cover - compatibility fallback
+	from google.adk.agents.llm_agent import LlmAgent
+
+try:  # ADK API path compatibility across versions.
+	from google.adk.sessions import InMemorySessionService
+except ImportError:  # pragma: no cover - compatibility fallback
+	from google.adk.sessions.in_memory_session_service import InMemorySessionService
 
 from ..models.animation_models import GlossPlan
 from ..utils.helpers import safe_json_loads
@@ -26,15 +39,29 @@ class GeminiLiveService:
 		temperature: float,
 		logger,
 	) -> None:
-		vertexai.init(project=project_id, location=region)
+		# ADK uses python-genai credentials/environment under the hood.
+		os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
+		os.environ.setdefault("GOOGLE_CLOUD_PROJECT", project_id)
+		os.environ.setdefault("GOOGLE_CLOUD_LOCATION", region)
+
 		self._logger = logger
 		self._model_candidates = self._build_model_candidates(model_name, fallback_model_names)
 		self._model_index = 0
-		self._model = GenerativeModel(self._model_candidates[self._model_index])
+		self._model_switch_lock = asyncio.Lock()
 		self._temperature = temperature
+		self._session_service = InMemorySessionService()
+		self._adk_user_id = "signbridge-backend"
+		self._adk_app_name_prefix = "signbridge"
+		self._gloss_app_name = f"{self._adk_app_name_prefix}-gloss"
+		self._sign_app_name = f"{self._adk_app_name_prefix}-sign"
+		self._ambient_app_name = f"{self._adk_app_name_prefix}-ambient"
+
 		self._logger.info(
 			"Gemini service initialized",
-			extra={"model": self._model_candidates[self._model_index]},
+			extra={
+				"model": self._model_candidates[self._model_index],
+				"engine": "google-adk",
+			},
 		)
 		self._translation_prompt_template = self._load_prompt_template(
 			"sign_translation_prompt.txt",
@@ -64,13 +91,14 @@ class GeminiLiveService:
 			"Transcript candidate: {{TRANSCRIPT}}\n"
 			"Energy RMS: {{ENERGY_RMS}}"
 		)
+		self._configure_adk_agents()
 
 	async def generate_gloss(self, transcript: str, memory_prompt: str) -> GlossPlan:
 		if not transcript:
 			return GlossPlan(gloss=[], facial="neutral", emotion="neutral")
 		prompt = self._build_gloss_prompt(transcript, memory_prompt)
-		response = await self._generate_content(prompt, top_p=0.9)
-		return self._parse_gloss_response(response)
+		response_text = await self._run_with_fallback(kind="gloss", prompt=prompt)
+		return self._parse_gloss_response(response_text)
 
 	async def interpret_sign_frames(self, frames_b64: Sequence[str], memory_prompt: str) -> str:
 		if not frames_b64:
@@ -80,13 +108,17 @@ class GeminiLiveService:
 			f"Frame {idx}: [image/jpeg bytes provided]" for idx, _frame in enumerate(selected_frames)
 		)
 		prompt = self._build_video_prompt(frame_descriptions, memory_prompt)
-		contents = self._build_video_contents(prompt, selected_frames)
+		contents = self._build_video_contents(selected_frames)
 		if not contents:
 			self._logger.info("No decodable sign frames found")
 			return ""
 
-		response = await self._generate_content(contents, top_p=0.95)
-		text = self._parse_sign_response(response)
+		response_text = await self._run_with_fallback(
+			kind="sign",
+			prompt=prompt,
+			image_bytes=contents,
+		)
+		text = self._parse_sign_response(response_text)
 		self._logger.debug("Gemini interpreted frames", extra={"text": text[:80]})
 		return text
 
@@ -96,29 +128,199 @@ class GeminiLiveService:
 			.replace("{{TRANSCRIPT}}", transcript_text.strip() or "<empty>")
 			.replace("{{ENERGY_RMS}}", f"{energy_rms:.6f}" if energy_rms is not None else "unknown")
 		)
-		response = await self._generate_content(prompt, top_p=0.9)
-		return self._parse_ambient_response(response)
+		response_text = await self._run_with_fallback(kind="ambient", prompt=prompt)
+		return self._parse_ambient_response(response_text)
 
-	async def _generate_content(self, content: Any, top_p: float):  # type: ignore[no-untyped-def]
-		attempt = 0
+	async def _run_with_fallback(
+		self,
+		kind: str,
+		prompt: str,
+		image_bytes: Sequence[bytes] | None = None,
+	) -> str:
 		while True:
 			try:
-				return await asyncio.to_thread(
-					self._model.generate_content,
-					content,
-					generation_config=GenerationConfig(temperature=self._temperature, top_p=top_p),
-				)
+				if kind == "gloss":
+					return await self._run_adk_agent(
+						runner=self._gloss_runner,
+						app_name=self._gloss_app_name,
+						prompt=prompt,
+					)
+				if kind == "sign":
+					return await self._run_adk_agent(
+						runner=self._sign_runner,
+						app_name=self._sign_app_name,
+						prompt=prompt,
+						image_bytes=image_bytes,
+					)
+				if kind == "ambient":
+					return await self._run_adk_agent(
+						runner=self._ambient_runner,
+						app_name=self._ambient_app_name,
+						prompt=prompt,
+					)
+				raise ValueError(f"Unknown ADK invocation kind: {kind}")
 			except Exception as exc:  # pragma: no cover - API compatibility / access fallback
-				attempt += 1
-				if attempt >= len(self._model_candidates) or not self._is_model_access_error(exc):
+				if not self._is_model_access_error(exc):
 					raise
-				self._model_index += 1
-				next_model = self._model_candidates[self._model_index]
-				self._model = GenerativeModel(next_model)
-				self._logger.warning(
-					"Gemini model unavailable, falling back",
-					extra={"model": next_model, "reason": str(exc)},
+				if not await self._advance_model_candidate(exc):
+					raise
+
+	async def _advance_model_candidate(self, exc: Exception) -> bool:
+		async with self._model_switch_lock:
+			next_index = self._model_index + 1
+			if next_index >= len(self._model_candidates):
+				return False
+
+			self._model_index = next_index
+			next_model = self._model_candidates[self._model_index]
+			self._configure_adk_agents()
+			self._logger.warning(
+				"Gemini model unavailable, falling back",
+				extra={"model": next_model, "reason": str(exc)},
+			)
+			return True
+
+	def _configure_adk_agents(self) -> None:
+		model_name = self._model_candidates[self._model_index]
+
+		self._gloss_agent = LlmAgent(
+			name="signbridge_gloss_agent",
+			model=model_name,
+			description="Converts speech transcripts into avatar-ready ASL gloss JSON.",
+			instruction=(
+				"Transform hearing-side speech into concise ASL gloss and return strict JSON with keys "
+				"gloss (array), facial (string), emotion (string)."
+			),
+			generate_content_config=genai_types.GenerateContentConfig(
+				temperature=self._temperature,
+				top_p=0.9,
+			),
+		)
+
+		self._sign_agent = LlmAgent(
+			name="signbridge_sign_interpreter_agent",
+			model=model_name,
+			description="Interprets image frame sequences of sign language.",
+			instruction=(
+				"Interpret sign frame sequences and return strict JSON with keys has_signing (boolean) and text (string)."
+			),
+			generate_content_config=genai_types.GenerateContentConfig(
+				temperature=self._temperature,
+				top_p=0.95,
+			),
+		)
+
+		self._ambient_agent = LlmAgent(
+			name="signbridge_ambient_audio_agent",
+			model=model_name,
+			description="Classifies ambient audio into speech/music/noise/silence categories.",
+			instruction=(
+				"Interpret ambient audio transcript candidates and return strict JSON with keys "
+				"category (speech|music|noise|silence|unclear) and text (string)."
+			),
+			generate_content_config=genai_types.GenerateContentConfig(
+				temperature=self._temperature,
+				top_p=0.9,
+			),
+		)
+
+		self._gloss_runner = Runner(
+			agent=self._gloss_agent,
+			app_name=self._gloss_app_name,
+			session_service=self._session_service,
+		)
+		self._sign_runner = Runner(
+			agent=self._sign_agent,
+			app_name=self._sign_app_name,
+			session_service=self._session_service,
+		)
+		self._ambient_runner = Runner(
+			agent=self._ambient_agent,
+			app_name=self._ambient_app_name,
+			session_service=self._session_service,
+		)
+
+	async def _run_adk_agent(
+		self,
+		runner: Runner,
+		app_name: str,
+		prompt: str,
+		image_bytes: Sequence[bytes] | None = None,
+	) -> str:
+		session_id = f"{app_name}-{uuid4().hex}"
+		await self._create_session(app_name=app_name, session_id=session_id)
+
+		parts: list[genai_types.Part] = [genai_types.Part(text=prompt)]
+		if image_bytes:
+			for payload in image_bytes:
+				parts.append(
+					genai_types.Part(
+						inline_data=genai_types.Blob(data=payload, mime_type="image/jpeg")
+					)
 				)
+
+		content = genai_types.Content(role="user", parts=parts)
+		final_text = ""
+
+		run_async_fn = getattr(runner, "run_async", None)
+		if callable(run_async_fn):
+			async for event in run_async_fn(
+				user_id=self._adk_user_id,
+				session_id=session_id,
+				new_message=content,
+			):
+				candidate = self._extract_final_event_text(event)
+				if candidate:
+					final_text = candidate
+		else:
+			events = await asyncio.to_thread(
+				runner.run,
+				user_id=self._adk_user_id,
+				session_id=session_id,
+				new_message=content,
+			)
+			for event in events:
+				candidate = self._extract_final_event_text(event)
+				if candidate:
+					final_text = candidate
+
+		if final_text:
+			return final_text
+
+		raise RuntimeError("ADK returned no final text response")
+
+	async def _create_session(self, app_name: str, session_id: str) -> None:
+		result = self._session_service.create_session(
+			app_name=app_name,
+			user_id=self._adk_user_id,
+			session_id=session_id,
+		)
+		if inspect.isawaitable(result):
+			await result
+
+	def _extract_text_from_content(self, content: Any) -> str:
+		parts = getattr(content, "parts", []) or []
+		chunks: list[str] = []
+		for part in parts:
+			text = getattr(part, "text", None)
+			if isinstance(text, str) and text.strip():
+				chunks.append(text.strip())
+		return "\n".join(chunks).strip()
+
+	def _extract_final_event_text(self, event: Any) -> str:
+		is_final_response = False
+		is_final_response_fn = getattr(event, "is_final_response", None)
+		if callable(is_final_response_fn):
+			is_final_response = bool(is_final_response_fn())
+
+		if not is_final_response:
+			return ""
+
+		event_content = getattr(event, "content", None)
+		if event_content is None:
+			return ""
+
+		return self._extract_text_from_content(event_content)
 
 	def _build_model_candidates(self, primary: str, fallbacks: Sequence[str]) -> list[str]:
 		candidates: list[str] = []
@@ -130,8 +332,9 @@ class GeminiLiveService:
 	def _is_model_access_error(self, exc: Exception) -> bool:
 		message = str(exc).lower()
 		return (
-			"publisher model" in message
-			and ("not found" in message or "does not have access" in message)
+			("publisher model" in message and ("not found" in message or "does not have access" in message))
+			or ("not found" in message and "model" in message)
+			or ("permission" in message and "model" in message)
 		)
 
 	def _select_sign_frames(self, frames_b64: Sequence[str], max_frames: int = 6) -> list[str]:
@@ -139,8 +342,8 @@ class GeminiLiveService:
 			return list(frames_b64)
 		return list(frames_b64[-max_frames:])
 
-	def _build_video_contents(self, prompt: str, frames_b64: Sequence[str]) -> list[Any]:
-		parts: list[Any] = [prompt]
+	def _build_video_contents(self, frames_b64: Sequence[str]) -> list[bytes]:
+		frame_payloads: list[bytes] = []
 		for frame in frames_b64:
 			try:
 				frame_bytes = base64.b64decode(frame, validate=True)
@@ -148,11 +351,11 @@ class GeminiLiveService:
 				continue
 			if not frame_bytes:
 				continue
-			parts.append(Part.from_data(data=frame_bytes, mime_type="image/jpeg"))
-		return parts if len(parts) > 1 else []
+			frame_payloads.append(frame_bytes)
+		return frame_payloads
 
-	def _parse_sign_response(self, response) -> str:  # type: ignore[no-untyped-def]
-		payload = response.text.strip() if getattr(response, "text", None) else ""
+	def _parse_sign_response(self, payload: str) -> str:
+		payload = payload.strip()
 		if not payload:
 			return ""
 
@@ -171,8 +374,8 @@ class GeminiLiveService:
 			return ""
 		return text
 
-	def _parse_gloss_response(self, response) -> GlossPlan:  # type: ignore[no-untyped-def]
-		payload = response.text if getattr(response, "text", None) else "{}"
+	def _parse_gloss_response(self, payload: str) -> GlossPlan:
+		payload = payload or "{}"
 		try:
 			data = safe_json_loads(payload)
 		except ValueError:
@@ -184,8 +387,8 @@ class GeminiLiveService:
 		self._logger.debug("Gemini gloss result", extra={"tokens": gloss})
 		return plan
 
-	def _parse_ambient_response(self, response) -> dict[str, str]:  # type: ignore[no-untyped-def]
-		payload = response.text.strip() if getattr(response, "text", None) else ""
+	def _parse_ambient_response(self, payload: str) -> dict[str, str]:
+		payload = payload.strip()
 		if not payload:
 			return {"category": "unclear", "text": "No clear speech detected."}
 

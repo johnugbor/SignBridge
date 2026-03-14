@@ -1,0 +1,42 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - signbridge-backend/docker/Dockerfile
+      - -t
+      - ${_AR_HOST}/${PROJECT_ID}/${_AR_REPO}/signbridge-backend:${_IMAGE_TAG}
+      - signbridge-backend
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_AR_HOST}/${PROJECT_ID}/${_AR_REPO}/signbridge-backend:${_IMAGE_TAG}
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - signbridge-backend
+      - --image=${_AR_HOST}/${PROJECT_ID}/${_AR_REPO}/signbridge-backend:${_IMAGE_TAG}
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --port=8000
+      - --timeout=3600
+      - --min-instances=1
+      - --max-instances=1
+      - --service-account=${_RUN_SA}
+      - --set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${_REGION},GOOGLE_GENAI_USE_VERTEXAI=TRUE,AVATAR_STORAGE_BUCKET=${_AVATAR_BUCKET}
+
+images:
+  - ${_AR_HOST}/${PROJECT_ID}/${_AR_REPO}/signbridge-backend:${_IMAGE_TAG}
+
+substitutions:
+  _REGION: us-central1
+  _AR_HOST: us-central1-docker.pkg.dev
+  _AR_REPO: signbridge
+  _IMAGE_TAG: latest
+  _RUN_SA: signbridge-runner@${PROJECT_ID}.iam.gserviceaccount.com
+  _AVATAR_BUCKET: signbridge-animations
