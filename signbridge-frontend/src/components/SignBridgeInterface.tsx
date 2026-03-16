@@ -680,6 +680,7 @@ const SignBridgeInterface = () => {
   const qrCodeImageUrl = shareSessionUrl
     ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(shareSessionUrl)}`
     : ''
+  const shouldShowSessionQr = isSessionJoined && Boolean(qrCodeImageUrl) && mode !== 'radio'
 
   const handleCopySessionId = async () => {
     if (!sessionId || !navigator.clipboard) {
@@ -791,7 +792,7 @@ const SignBridgeInterface = () => {
   }
 
   return (
-    <div className="signbridge-interface">
+    <div className={`signbridge-interface mode-${mode}`}>
       {showCopiedToast && <div className="copy-toast">Copied</div>}
 
       <div className="sb-toolbar">
@@ -921,6 +922,17 @@ const SignBridgeInterface = () => {
 
             {avatarError && <p className="error">{avatarError}</p>}
           </section>
+
+          {shouldShowSessionQr && qrCodeImageUrl && (
+            <section className="session-qr session-qr-mobile">
+              <div className="session-qr-header">
+                <QrCode size={15} />
+                <h4>Session QR</h4>
+              </div>
+              <img src={qrCodeImageUrl} alt="Session join QR code" />
+              <p>Scan to join this session quickly.</p>
+            </section>
+          )}
         </div>
 
         <aside className="controls-section">
@@ -970,8 +982,8 @@ const SignBridgeInterface = () => {
             )}
           </section>
 
-          {isSessionJoined && qrCodeImageUrl && mode !== 'radio' && (
-            <section className="session-qr">
+          {shouldShowSessionQr && qrCodeImageUrl && (
+            <section className="session-qr session-qr-desktop">
               <div className="session-qr-header">
                 <QrCode size={15} />
                 <h4>Session QR</h4>

@@ -81,8 +81,9 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
 # Create .env file with Google Cloud credentials
-echo "GOOGLE_CLOUD_PROJECT=your-project-id" > .env
-echo "GOOGLE_CLOUD_REGION=us-central1" >> .env
+echo "GCP_PROJECT_ID=your-project-id" > .env
+echo "GCP_REGION=us-central1" >> .env
+echo "GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json" >> .env
 
 # Run development server
 python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -90,7 +91,7 @@ python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 The backend will be available at `http://localhost:8000`
 
-Health check: `curl http://localhost:8000/health`
+Health check: `curl http://localhost:8000/api/health`
 
 ### Frontend Setup
 
@@ -102,7 +103,7 @@ npm install
 
 # Create .env file
 echo "VITE_API_URL=http://localhost:8000" > .env
-echo "VITE_WS_URL=ws://localhost:8000/ws" >> .env
+echo "VITE_WS_URL=ws://localhost:8000/ws/signbridge" >> .env
 
 # Start development server
 npm run dev
@@ -110,7 +111,7 @@ npm run dev
 
 The frontend will be available at `http://localhost:5173`
 
-### Docker Setup (Full Stack)
+### Docker Setup (Backend + Redis)
 
 ```bash
 cd signbridge-backend
@@ -118,11 +119,88 @@ cd signbridge-backend
 # Build and start all services
 docker-compose up --build
 
-# Access the application:
-# Frontend: http://localhost:5173
+# Access the backend:
 # Backend API: http://localhost:8000
 # Backend Docs: http://localhost:8000/docs
 ```
+
+## Reproducible Testing (For Judges)
+
+Use these exact steps from a clean checkout to validate the project.
+
+### 1) Start The Stack
+
+```bash
+cd signbridge-backend
+docker-compose up --build
+```
+
+In a second terminal, start the frontend:
+
+```bash
+cd signbridge-frontend
+npm install
+npm run dev
+```
+
+Expected:
+- Backend on `http://localhost:8000`
+- Frontend on `http://localhost:5173`
+
+### 2) Verify Backend Liveness And Readiness
+
+Run these in a new terminal:
+
+```bash
+curl http://localhost:8000/api/health
+curl http://localhost:8000/api/readiness
+```
+
+Expected responses:
+
+```json
+{"status":"ok"}
+{"status":"ready"}
+```
+
+### 3) Verify WebSocket Handshake
+
+Open `http://localhost:5173`, then open browser DevTools Console and run:
+
+```javascript
+const ws = new WebSocket('ws://localhost:8000/ws/signbridge')
+ws.onmessage = (event) => console.log(JSON.parse(event.data))
+```
+
+Expected first server message:
+- `type: "session_ack"`
+- `payload.session_id` present
+
+### 4) Functional Smoke Test
+
+In the UI:
+
+1. Select `Hearer Mode`, hold mic button for 2-3 seconds, then release.
+2. Confirm transcript updates in the UI.
+3. Select `Deaf Mode`, start camera capture, sign briefly, then stop.
+4. Confirm transcript/audio response is returned.
+
+Pass criteria:
+- No frontend crash
+- WebSocket remains connected
+- Transcript/response updates appear in real time
+
+### 5) Optional: Run Backend Test Suite
+
+```bash
+cd signbridge-backend
+pip install pytest pytest-cov pytest-asyncio httpx
+pytest --maxfail=1 -q
+```
+
+Note:
+- Frontend unit test scripts are not configured in `package.json` yet.
+- Additional testing details are documented in `TESTING.md`.
 
 ## Development Workflow
 
@@ -180,17 +258,18 @@ npm run build
 
 ### Backend (.env)
 ```
-GOOGLE_CLOUD_PROJECT=your-project-id
-GOOGLE_CLOUD_REGION=us-central1
-VERTEX_AI_MODEL=gemini-2.0-flash
-GCS_BUCKET=your-bucket-name
+GCP_PROJECT_ID=your-project-id
+GCP_REGION=us-central1
+GEMINI_MODEL_NAME=gemini-1.5-flash
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
+AVATAR_STORAGE_BUCKET=your-bucket-name
 REDIS_URL=redis://localhost:6379  # Optional, for session persistence
 ```
 
 ### Frontend (.env)
 ```
 VITE_API_URL=http://localhost:8000
-VITE_WS_URL=ws://localhost:8000/ws
+VITE_WS_URL=ws://localhost:8000/ws/signbridge
 ```
 
 ## Performance Targets
@@ -203,7 +282,7 @@ VITE_WS_URL=ws://localhost:8000/ws
 ## Troubleshooting
 
 ### WebSocket Connection Fails
-- Ensure backend is running: `curl http://localhost:8000/health`
+- Ensure backend is running: `curl http://localhost:8000/api/health`
 - Check firewall settings (port 8000)
 - Verify WebSocket proxy in Vite config
 

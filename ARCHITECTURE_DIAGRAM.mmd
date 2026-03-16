@@ -1,0 +1,61 @@
+flowchart LR
+    subgraph FE[Frontend - React + TypeScript + Three.js]
+        UI[SignBridge Interface\nHearer / Deaf / Radio Modes]
+        AC[Audio Capture\nWebRTC + Web Audio]
+        VC[Video Capture\nCamera Frames]
+        AR[Avatar Renderer\nThree.js]
+        WSClient[WebSocket Client]
+        APIClient[REST Client]
+        UI --> AC
+        UI --> VC
+        UI --> AR
+        AC --> WSClient
+        VC --> WSClient
+        UI --> APIClient
+    end
+
+    subgraph BE[Backend - FastAPI on Cloud Run]
+        WSEndpoint["WebSocket Endpoint<br/>/ws/signbridge"]
+        REST["Health + API Endpoints"]
+        Agent["SignConversationAgent<br/>(ADK Orchestration)"]
+        ASM[AudioStreamHandler]
+        VSM[VideoStreamHandler]
+        SM[SessionManager]
+        CM[ConversationMemory]
+
+        WSEndpoint --> Agent
+        Agent --> ASM
+        Agent --> VSM
+        Agent --> SM
+        SM --> CM
+    end
+
+    subgraph GCP[Google Cloud Services]
+        Vertex["Vertex AI<br/>Gemini Live API"]
+        STT["Cloud Speech-to-Text"]
+        TTS["Cloud Text-to-Speech"]
+        GCS["Cloud Storage<br/>Animation Assets"]
+        Redis[("Redis / Memorystore<br/>Session State")]
+    end
+
+    WSClient <--> WSEndpoint
+    APIClient --> REST
+
+    Agent <--> Vertex
+    Agent --> STT
+    Agent --> TTS
+    Agent --> GCS
+    SM <--> Redis
+
+    TTS --> WSEndpoint
+    WSEndpoint --> WSClient
+    Agent --> WSEndpoint
+
+    WSClient --> AR
+
+    classDef cloud fill:#e8f1ff,stroke:#2f5d9f,stroke-width:1px;
+    classDef app fill:#eefaf1,stroke:#2c7a4b,stroke-width:1px;
+    classDef data fill:#fff8e6,stroke:#a66b00,stroke-width:1px;
+
+    class Vertex,STT,TTS,GCS,Redis cloud;
+    class UI,AC,VC,AR,WSClient,APIClient,WSEndpoint,REST,Agent,ASM,VSM,SM,CM app;

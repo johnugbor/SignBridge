@@ -157,7 +157,7 @@
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 760px) {
   .app-header {
     flex-wrap: wrap;
     align-items: flex-start;

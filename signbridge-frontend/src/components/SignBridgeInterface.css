@@ -464,6 +464,10 @@
   text-align: left;
 }
 
+.session-qr-mobile {
+  display: none;
+}
+
 .session-qr-header {
   display: inline-flex;
   align-items: center;
@@ -684,6 +688,10 @@
     gap: 0.7rem;
   }
 
+  .avatar-section {
+    display: none;
+  }
+
   .interface-container {
     width: 100%;
     grid-template-columns: minmax(0, 1fr);
@@ -707,8 +715,17 @@
     align-items: center;
   }
 
+  .signbridge-interface.mode-deaf .avatar-column {
+    order: 1;
+  }
+
+  .signbridge-interface.mode-deaf .controls-section {
+    order: 2;
+  }
+
   .avatar-column > .transcript-box,
   .avatar-section,
+  .session-qr-mobile,
   .controls-section > section,
   .processing-indicator,
   .error-box,
@@ -815,6 +832,14 @@
   .session-qr img {
     width: 116px;
     height: 116px;
+  }
+
+  .session-qr-desktop {
+    display: none;
+  }
+
+  .session-qr-mobile {
+    display: block;
   }
 }
 
