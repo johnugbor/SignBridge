@@ -5,8 +5,10 @@ A real-time web application that enables bidirectional communication between dea
 ## Project Overview
 
 SignBridge Live translates communication in real-time:
-- **Hearing users** speak → app translates to sign language avatar
 - **Deaf users** sign via camera → app interprets and speaks natural audio
+
+- **Hearing users** speak → app translates to text
+
 
 ### Tech Stack
 
